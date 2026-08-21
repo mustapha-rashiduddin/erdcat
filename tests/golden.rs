@@ -66,6 +66,7 @@ fn dot_renders_tables_edges_and_junctions() {
     assert!(dot.contains("\"lonely\""));
     assert!(!dot.contains("\"author_book\""));
     assert!(dot.contains("\"book\":col_author_id -> \"author\":col_id"));
+    assert!(dot.contains("author_id FK : INTEGER"));
     assert!(dot.contains("arrowtail=crow"));
     let mn = dot.contains("\"book\":col_id -> \"author\":col_id")
         || dot.contains("\"author\":col_id -> \"book\":col_id");
@@ -79,6 +80,7 @@ fn mermaid_renders_entities_and_relationships() {
     assert!(mmd.starts_with("erDiagram\n"));
     assert!(mmd.contains("author {"));
     assert!(mmd.contains("INTEGER id PK"));
+    assert!(mmd.contains("INTEGER author_id FK"));
     assert!(mmd.contains("author ||--o{ book"));
     assert!(!mmd.contains("author_book {"));
 }
@@ -106,7 +108,7 @@ fn unicode_renders_boxes_columns_and_edges() {
     assert!(out.contains("id PK"));
     assert!(out.contains("title TEXT"));
     assert!(!out.contains("author_book"));
-    assert!(row(&out, "author_id INTEGER").contains(['├', '┤']));
+    assert!(row(&out, "author_id FK INTEGER").contains(['├', '┤']));
     assert!(row(&out, "id PK INTEGER").contains(['<', '>']));
     assert!(!row(&out, "author     ").contains(['<', '>']));
 }
@@ -122,13 +124,13 @@ fn unicode_simple_fk_matches_golden_grid() {
           );",
     );
     let expected = concat!(
-        " ┌───────────────────┐\n",
-        " │       book        │        ┌───────────────┐\n",
-        " ├───────────────────┤        │    author     │\n",
-        " │   id PK INTEGER   │        ├───────────────┤\n",
-        " │    title TEXT     │       >┤ id PK INTEGER │\n",
-        " │ author_id INTEGER ├───────┘│   name TEXT   │\n",
-        " └───────────────────┘        └───────────────┘\n",
+        " ┌──────────────────────┐\n",
+        " │         book         │        ┌───────────────┐\n",
+        " ├──────────────────────┤        │    author     │\n",
+        " │    id PK INTEGER     │        ├───────────────┤\n",
+        " │      title TEXT      │       >┤ id PK INTEGER │\n",
+        " │ author_id FK INTEGER ├───────┘│   name TEXT   │\n",
+        " └──────────────────────┘        └───────────────┘\n",
     );
     assert_eq!(emit::render(Format::Unicode, &schema), expected);
 }
@@ -147,15 +149,15 @@ fn unicode_renders_self_reference_loop() {
         schema("CREATE TABLE node (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES node);");
     let out = emit::render(Format::Unicode, &schema);
     let expected = concat!(
-        " ┌───────────────────┐\n",
-        " │       node        │\n",
-        " ├───────────────────┤\n",
-        " │   id PK INTEGER   ├<\n",
-        " │ parent_id INTEGER ├┘\n",
-        " └───────────────────┘\n",
+        " ┌──────────────────────┐\n",
+        " │         node         │\n",
+        " ├──────────────────────┤\n",
+        " │    id PK INTEGER     ├<\n",
+        " │ parent_id FK INTEGER ├┘\n",
+        " └──────────────────────┘\n",
     );
     assert_eq!(out, expected);
-    assert!(row(&out, "parent_id INTEGER").contains(['├', '┤']));
+    assert!(row(&out, "parent_id FK INTEGER").contains(['├', '┤']));
     assert!(row(&out, "id PK INTEGER").contains(['<', '>']));
     assert!(!row(&out, "node").contains(['<', '>']));
 }
@@ -164,10 +166,10 @@ fn unicode_renders_self_reference_loop() {
 fn parallel_and_junction_edges_use_column_ports() {
     let schema = stress_fixture();
     let out = emit::render(Format::Unicode, &schema);
-    assert!(row(&out, "book_id INTEGER").contains(['├', '┤']));
-    assert!(row(&out, "author_id INTEGER").contains(['├', '┤']));
-    assert!(row(&out, "co_author_id INTEGER").contains(['├', '┤']));
-    assert!(row(&out, "parent_id INTEGER").contains(['├', '┤']));
+    assert!(row(&out, "book_id FK INTEGER").contains(['├', '┤']));
+    assert!(row(&out, "author_id FK").contains(['├', '┤']));
+    assert!(row(&out, "co_author_id FK").contains(['├', '┤']));
+    assert!(row(&out, "parent_id FK INTEGER").contains(['├', '┤']));
     assert!(
         layout::compute(&schema)
             .edges
@@ -286,4 +288,54 @@ fn terminal_unsafe_names_are_escaped() {
     let out = emit::render(Format::Unicode, &schema);
     assert!(out.contains("wide\\u{754c}"));
     assert!(out.contains("line\\nbreak TEXT"));
+}
+
+#[test]
+fn composite_and_overlapping_keys_are_explicit() {
+    let schema = schema(
+        "CREATE TABLE parent (
+             tenant_id INTEGER,
+             code TEXT,
+             PRIMARY KEY (tenant_id, code)
+         );
+         CREATE TABLE owner (id INTEGER PRIMARY KEY);
+         CREATE TABLE child (
+             tenant_id INTEGER,
+             child_id INTEGER,
+             parent_code TEXT,
+             owner_id INTEGER,
+             note TEXT,
+             PRIMARY KEY (tenant_id, child_id),
+             FOREIGN KEY (tenant_id, parent_code)
+                 REFERENCES parent(tenant_id, code),
+             FOREIGN KEY (owner_id) REFERENCES owner(id)
+         );
+         CREATE TABLE node_link (
+             backlink_id TEXT NOT NULL,
+             forward_id TEXT NOT NULL,
+             reviewed INTEGER NOT NULL DEFAULT 0,
+             PRIMARY KEY (backlink_id, forward_id)
+         );",
+    );
+
+    let unicode = emit::render(Format::Unicode, &schema);
+    assert!(unicode.contains("tenant_id PK(1/2), FK2(1/2) INTEGER"));
+    assert!(unicode.contains("child_id PK(2/2) INTEGER"));
+    assert!(unicode.contains("parent_code FK2(2/2) TEXT"));
+    assert!(unicode.contains("owner_id FK1 INTEGER"));
+    assert!(unicode.contains("backlink_id PK(1/2) TEXT"));
+    assert!(unicode.contains("forward_id PK(2/2) TEXT"));
+
+    let ascii = emit::render(Format::Ascii, &schema);
+    assert!(ascii.contains("tenant_id PK(1/2), FK2(1/2) INTEGER"));
+
+    let dot = emit::render(Format::Dot, &schema);
+    assert!(dot.contains("<b>tenant_id</b> PK(1/2), FK2(1/2) : INTEGER"));
+    assert!(dot.contains("parent_code FK2(2/2) : TEXT"));
+
+    let mermaid = emit::render(Format::Mermaid, &schema);
+    assert!(mermaid.contains("INTEGER tenant_id PK, FK \"PK(1/2), FK2(1/2)\""));
+    assert!(mermaid.contains("INTEGER child_id PK"));
+    assert!(mermaid.contains("TEXT parent_code FK \"FK2(2/2)\""));
+    assert!(mermaid.contains("INTEGER owner_id FK"));
 }

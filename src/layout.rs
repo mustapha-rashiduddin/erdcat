@@ -35,8 +35,10 @@ fn box_lines(name: &str, t: Option<&Table>) -> Vec<String> {
         Some(t) => {
             for c in &t.columns {
                 let mut s = display_text(&c.name);
-                if c.primary_key {
-                    s.push_str(" PK");
+                let labels = t.column_key_labels(c);
+                if !labels.is_empty() {
+                    s.push(' ');
+                    s.push_str(&labels.join(", "));
                 }
                 if !c.data_type.is_empty() {
                     s.push(' ');

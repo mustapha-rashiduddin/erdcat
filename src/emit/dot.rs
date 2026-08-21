@@ -35,16 +35,20 @@ fn node(table: &Table) -> String {
     );
     s.push_str(&format!("<tr><td><b>{}</b></td></tr>", esc(&table.name)));
     for c in &table.columns {
-        let name = if c.primary_key {
+        let mut cell = if c.primary_key {
             format!("<b>{}</b>", esc(&c.name))
         } else {
             esc(&c.name)
         };
-        let cell = if c.data_type.is_empty() {
-            name
-        } else {
-            format!("{} : {}", name, esc(&c.data_type))
-        };
+        let labels = table.column_key_labels(c);
+        if !labels.is_empty() {
+            cell.push(' ');
+            cell.push_str(&labels.join(", "));
+        }
+        if !c.data_type.is_empty() {
+            cell.push_str(" : ");
+            cell.push_str(&esc(&c.data_type));
+        }
         s.push_str(&format!(
             "<tr><td port=\"{}\">{}</td></tr>",
             port(&c.name),

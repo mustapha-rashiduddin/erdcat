@@ -34,10 +34,23 @@ pub fn render(schema: &Schema) -> String {
                 &c.data_type
             });
             out.push_str(&format!("        {} {}", ty, ident(&c.name)));
-            if c.primary_key {
-                out.push_str(" PK");
-            } else if c.not_null {
-                out.push_str(" \"NOT NULL\"");
+            let foreign_key = t.is_foreign_key_column(c);
+            match (c.primary_key, foreign_key) {
+                (true, true) => out.push_str(" PK, FK"),
+                (true, false) => out.push_str(" PK"),
+                (false, true) => out.push_str(" FK"),
+                (false, false) => {}
+            }
+            let labels = t.column_key_labels(c);
+            let mut details = Vec::new();
+            if labels.iter().any(|label| label != "PK" && label != "FK") {
+                details.push(labels.join(", "));
+            }
+            if !c.primary_key && c.not_null {
+                details.push("NOT NULL".to_string());
+            }
+            if !details.is_empty() {
+                out.push_str(&format!(" \"{}\"", details.join("; ")));
             }
             out.push('\n');
         }

@@ -28,11 +28,67 @@ pub struct Table {
 }
 
 impl Table {
-    pub fn junction_foreign_keys(&self) -> Option<(&ForeignKey, &ForeignKey)> {
+    fn foreign_key_constraints(&self) -> Vec<Vec<&ForeignKey>> {
         let mut constraints: BTreeMap<usize, Vec<&ForeignKey>> = BTreeMap::new();
         for fk in &self.foreign_keys {
             constraints.entry(fk.id).or_default().push(fk);
         }
+        let mut constraints: Vec<_> = constraints.into_values().collect();
+        for constraint in &mut constraints {
+            constraint.sort_by_key(|fk| fk.sequence);
+        }
+        constraints
+    }
+
+    pub(crate) fn column_key_labels(&self, column: &Column) -> Vec<String> {
+        let mut labels = Vec::new();
+        if column.primary_key {
+            let count = self
+                .columns
+                .iter()
+                .filter(|column| column.primary_key)
+                .count();
+            if count == 1 {
+                labels.push("PK".to_string());
+            } else {
+                labels.push(format!("PK({}/{count})", column.primary_key_position));
+            }
+        }
+
+        let constraints = self.foreign_key_constraints();
+        let constraint_count = constraints.len();
+        for (index, constraint) in constraints.into_iter().enumerate() {
+            let prefix = if constraint_count == 1 {
+                "FK".to_string()
+            } else {
+                format!("FK{}", index + 1)
+            };
+            for fk in constraint
+                .iter()
+                .filter(|fk| fk.from_column.eq_ignore_ascii_case(&column.name))
+            {
+                if constraint.len() == 1 {
+                    labels.push(prefix.clone());
+                } else {
+                    labels.push(format!(
+                        "{prefix}({}/{})",
+                        fk.sequence + 1,
+                        constraint.len()
+                    ));
+                }
+            }
+        }
+        labels
+    }
+
+    pub(crate) fn is_foreign_key_column(&self, column: &Column) -> bool {
+        self.foreign_keys
+            .iter()
+            .any(|fk| fk.from_column.eq_ignore_ascii_case(&column.name))
+    }
+
+    pub fn junction_foreign_keys(&self) -> Option<(&ForeignKey, &ForeignKey)> {
+        let constraints = self.foreign_key_constraints();
         if constraints.len() != 2 {
             return None;
         }
@@ -43,13 +99,8 @@ impl Table {
             return None;
         }
 
-        let mut groups = constraints.values_mut();
-        let first = groups.next()?;
-        let second = groups.next()?;
-        first.sort_by_key(|fk| fk.sequence);
-        second.sort_by_key(|fk| fk.sequence);
-        let a = first.first()?;
-        let b = second.first()?;
+        let a = constraints[0].first()?;
+        let b = constraints[1].first()?;
         if a.to_table.eq_ignore_ascii_case(&b.to_table) {
             None
         } else {
