@@ -186,16 +186,23 @@ fn route_edges(layout: &Layout) -> Vec<RoutedEdge> {
     let mut used: HashMap<Point, u8> = HashMap::new();
     let mut port_use: HashMap<Point, usize> = HashMap::new();
     let mut routes = Vec::new();
+    let nodes: HashMap<&str, &NodeBox> = layout
+        .nodes
+        .iter()
+        .map(|node| (node.name.as_str(), node))
+        .collect();
 
     let mut pending: Vec<_> = layout.edges.iter().collect();
     pending.sort_by_key(|edge| !edge.bidirectional);
     for edge in pending {
-        let Some(source_node) = layout.nodes.iter().find(|n| n.name == edge.from) else {
-            continue;
-        };
-        let Some(target_node) = layout.nodes.iter().find(|n| n.name == edge.to) else {
-            continue;
-        };
+        let source_node = nodes
+            .get(edge.from.as_str())
+            .copied()
+            .expect("edge source has a layout node");
+        let target_node = nodes
+            .get(edge.to.as_str())
+            .copied()
+            .expect("edge target has a layout node");
         let source_row = line_row(source_node, edge.from_line);
         let target_row = line_row(target_node, edge.to_line);
         let source_center = source_node.x + source_node.w as i64 / 2;

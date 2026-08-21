@@ -20,9 +20,10 @@ fn ident(s: &str) -> String {
 
 pub fn render(schema: &Schema) -> String {
     let mut out = String::from("erDiagram\n");
+    let junction_names = schema.collapsible_junctions();
 
     for t in schema.tables.values() {
-        if t.junction_targets().is_some() {
+        if junction_names.contains(&t.name) {
             continue;
         }
         out.push_str(&format!("    {} {{\n", ident(&t.name)));
@@ -44,11 +45,21 @@ pub fn render(schema: &Schema) -> String {
     }
 
     for t in schema.tables.values() {
-        if let Some((a, b)) = t.junction_targets() {
-            out.push_str(&format!("    {} ||--o{{ {}\n", ident(&a), ident(&b)));
+        if junction_names.contains(&t.name) {
+            let (a, b) = t
+                .junction_foreign_keys()
+                .expect("collapsible junction has two foreign keys");
+            out.push_str(&format!(
+                "    {} ||--o{{ {}\n",
+                ident(&a.to_table),
+                ident(&b.to_table)
+            ));
             continue;
         }
         for fk in &t.foreign_keys {
+            if junction_names.contains(&fk.to_table) {
+                continue;
+            }
             out.push_str(&format!(
                 "    {} ||--o{{ {} : {}\n",
                 ident(&fk.to_table),

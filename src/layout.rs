@@ -2,6 +2,7 @@ use crate::schema::{Schema, Table};
 use dagre::graph::{Graph, GraphOptions};
 use dagre::{EdgeLabel, NodeLabel, RankDir, layout};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use unicode_width::UnicodeWidthChar;
 
 #[derive(Debug, Clone)]
 pub struct NodeBox {
@@ -29,16 +30,17 @@ pub struct Layout {
 }
 
 fn box_lines(name: &str, t: Option<&Table>) -> Vec<String> {
-    let mut lines = vec![name.to_string()];
+    let mut lines = vec![display_text(name)];
     match t {
         Some(t) => {
             for c in &t.columns {
-                let mut s = c.name.clone();
+                let mut s = display_text(&c.name);
                 if c.primary_key {
                     s.push_str(" PK");
                 }
                 if !c.data_type.is_empty() {
-                    s.push_str(&format!(" {}", c.data_type));
+                    s.push(' ');
+                    s.push_str(&display_text(&c.data_type));
                 }
                 lines.push(s);
             }
@@ -46,6 +48,18 @@ fn box_lines(name: &str, t: Option<&Table>) -> Vec<String> {
         None => lines.push("?".to_string()),
     }
     lines
+}
+
+fn display_text(value: &str) -> String {
+    let mut out = String::new();
+    for c in value.chars() {
+        if UnicodeWidthChar::width(c) == Some(1) {
+            out.push(c);
+        } else {
+            out.extend(c.escape_default());
+        }
+    }
+    out
 }
 
 fn node_size(lines: &[String]) -> (usize, usize) {
@@ -59,43 +73,14 @@ fn node_size(lines: &[String]) -> (usize, usize) {
 }
 
 pub fn compute(schema: &Schema) -> Layout {
-    let junction_names: BTreeSet<&str> = schema
-        .tables
-        .values()
-        .filter(|t| t.junction_targets().is_some())
-        .map(|t| t.name.as_str())
-        .collect();
-
-    let mut names: BTreeSet<String> = schema
-        .tables
-        .keys()
-        .filter(|n| !junction_names.contains(n.as_str()))
-        .cloned()
-        .collect();
-    for t in schema.tables.values() {
-        if junction_names.contains(t.name.as_str()) {
-            continue;
-        }
-        for fk in &t.foreign_keys {
-            if !junction_names.contains(fk.to_table.as_str()) {
-                names.insert(fk.to_table.clone());
-            }
-        }
-    }
-
+    let junction_names = schema.collapsible_junctions();
     let mut edges = Vec::new();
-    let mut sizes: HashMap<String, (usize, usize)> = HashMap::new();
-    for name in &names {
-        let lines = box_lines(name, schema.tables.get(name));
-        sizes.insert(name.clone(), node_size(&lines));
-    }
-
     for t in schema.tables.values() {
-        if junction_names.contains(t.name.as_str()) {
+        if junction_names.contains(&t.name) {
             continue;
         }
         for fk in &t.foreign_keys {
-            if junction_names.contains(fk.to_table.as_str()) {
+            if junction_names.contains(&fk.to_table) {
                 continue;
             }
             let fl = column_line(schema.tables.get(&t.name), &fk.from_column);
@@ -111,16 +96,37 @@ pub fn compute(schema: &Schema) -> Layout {
     }
 
     for t in schema.tables.values() {
-        if let Some((a, b)) = t.junction_targets() {
+        if !junction_names.contains(&t.name) {
+            continue;
+        }
+        if let Some((a, b)) = t.junction_foreign_keys() {
             edges.push(EdgeRoute {
-                from: a.clone(),
-                to: b.clone(),
-                from_line: pk_line(schema.tables.get(&a)),
-                to_line: pk_line(schema.tables.get(&b)),
+                from: a.to_table.clone(),
+                to: b.to_table.clone(),
+                from_line: column_line(schema.tables.get(&a.to_table), &a.to_column),
+                to_line: column_line(schema.tables.get(&b.to_table), &b.to_column),
                 bidirectional: true,
             });
         }
     }
+
+    let mut names: BTreeSet<String> = schema
+        .tables
+        .keys()
+        .filter(|name| !junction_names.contains(*name))
+        .cloned()
+        .collect();
+    for edge in &edges {
+        names.insert(edge.from.clone());
+        names.insert(edge.to.clone());
+    }
+    let sizes: HashMap<String, (usize, usize)> = names
+        .iter()
+        .map(|name| {
+            let lines = box_lines(name, schema.tables.get(name));
+            (name.clone(), node_size(&lines))
+        })
+        .collect();
 
     let connected: BTreeSet<String> = edges
         .iter()
@@ -132,11 +138,15 @@ pub fn compute(schema: &Schema) -> Layout {
         compound: false,
     });
     for name in &connected {
+        let (width, height) = sizes
+            .get(name)
+            .copied()
+            .expect("edge endpoint has a computed size");
         g.set_node(
             name.as_str(),
             Some(NodeLabel {
-                width: sizes[name].0 as f64,
-                height: sizes[name].1 as f64,
+                width: width as f64,
+                height: height as f64,
                 ..Default::default()
             }),
         );
@@ -163,7 +173,10 @@ pub fn compute(schema: &Schema) -> Layout {
     let mut ranks: BTreeMap<i32, Vec<NodeBox>> = BTreeMap::new();
     for name in g.nodes() {
         let label = g.node(&name).expect("laid-out node");
-        let (w, h) = sizes[&name];
+        let (w, h) = sizes
+            .get(&name)
+            .copied()
+            .expect("laid-out node has a computed size");
         let x = (label.x.unwrap_or(0.0) - w as f64 / 2.0).round() as i64;
         let y = (label.y.unwrap_or(0.0) - h as f64 / 2.0).round() as i64;
         ranks
@@ -230,13 +243,12 @@ pub fn compute(schema: &Schema) -> Layout {
 }
 
 fn column_line(t: Option<&Table>, col: &str) -> usize {
-    t.and_then(|t| t.columns.iter().position(|c| c.name == col))
-        .map_or(1, |i| i + 1)
-}
-
-fn pk_line(t: Option<&Table>) -> usize {
-    t.and_then(|t| t.columns.iter().position(|c| c.primary_key))
-        .map_or(1, |i| i + 1)
+    t.and_then(|t| {
+        t.columns
+            .iter()
+            .position(|c| c.name.eq_ignore_ascii_case(col))
+    })
+    .map_or(1, |i| i + 1)
 }
 
 pub fn line_row(n: &NodeBox, idx: usize) -> i64 {

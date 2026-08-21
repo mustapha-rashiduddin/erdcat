@@ -1,5 +1,4 @@
 use crate::schema::{Schema, Table};
-use std::collections::HashSet;
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -22,7 +21,9 @@ fn port(col: &str) -> String {
 
 fn node_port(schema: &Schema, table: &str, col: &str) -> String {
     match schema.tables.get(table) {
-        Some(t) if t.columns.iter().any(|c| c.name == col) => format!(":{}", port(col)),
+        Some(t) if t.columns.iter().any(|c| c.name.eq_ignore_ascii_case(col)) => {
+            format!(":{}", port(col))
+        }
         _ => String::new(),
     }
 }
@@ -55,28 +56,23 @@ fn node(table: &Table) -> String {
 }
 
 pub fn render(schema: &Schema) -> String {
-    let junction_names: HashSet<&str> = schema
-        .tables
-        .values()
-        .filter(|t| t.junction_targets().is_some())
-        .map(|t| t.name.as_str())
-        .collect();
+    let junction_names = schema.collapsible_junctions();
 
     let mut out = String::from("digraph erd {\n  rankdir=LR;\n  node [shape=plaintext];\n");
 
     for t in schema.tables.values() {
-        if !junction_names.contains(t.name.as_str()) {
+        if !junction_names.contains(&t.name) {
             out.push_str(&node(t));
             out.push('\n');
         }
     }
 
     for t in schema.tables.values() {
-        if junction_names.contains(t.name.as_str()) {
+        if junction_names.contains(&t.name) {
             continue;
         }
         for fk in &t.foreign_keys {
-            if junction_names.contains(fk.to_table.as_str()) {
+            if junction_names.contains(&fk.to_table) {
                 continue;
             }
             out.push_str(&format!(
@@ -90,11 +86,16 @@ pub fn render(schema: &Schema) -> String {
     }
 
     for t in schema.tables.values() {
-        if let Some((a, b)) = t.junction_targets() {
+        if !junction_names.contains(&t.name) {
+            continue;
+        }
+        if let Some((a, b)) = t.junction_foreign_keys() {
             out.push_str(&format!(
-                "  {} -> {} [dir=both, arrowtail=crow, arrowhead=crow];\n",
-                id(&a),
-                id(&b)
+                "  {}{} -> {}{} [dir=both, arrowtail=crow, arrowhead=crow];\n",
+                id(&a.to_table),
+                node_port(schema, &a.to_table, &a.to_column),
+                id(&b.to_table),
+                node_port(schema, &b.to_table, &b.to_column),
             ));
         }
     }
