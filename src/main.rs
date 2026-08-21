@@ -11,7 +11,7 @@ use std::path::PathBuf;
 )]
 struct Args {
     db_path: PathBuf,
-    #[arg(short, long, value_enum, default_value = "dot")]
+    #[arg(short, long, value_enum, default_value = "unicode")]
     format: Format,
 }
 
