@@ -1,0 +1,8 @@
+[package]
+name = "erdcat"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6.6", features = ["derive"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
